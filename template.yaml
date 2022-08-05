@@ -1,0 +1,108 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  SAM template for lambda function DynamoDB and API gateway
+
+Globals:
+  Function:
+    Timeout: 3
+
+Resources:
+  DynamoDBTable:
+    Type: AWS::DynamoDB::Table
+    Properties: 
+      AttributeDefinitions: 
+        - AttributeName: stat
+          AttributeType: S
+      KeySchema: 
+        - AttributeName: stat
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+      ProvisionedThroughput: 
+        ReadCapacityUnits: 0
+        WriteCapacityUnits: 0
+      TableName: Cloud-Resume-Dev
+      TableClass: STANDARD_INFREQUENT_ACCESS
+
+  apiGateway:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Description: Used with AWS Lambda function for incrementing counter
+      Name: incrementViewcount-Dev
+      ProtocolType: HTTP
+      DisableExecuteApiEndpoint: False
+      CorsConfiguration:
+        AllowOrigins:
+          - '*'
+  CounterAPIDeployment:
+    Type: AWS::ApiGatewayV2::Deployment
+    DependsOn:
+      - CounterViewRoute
+    Properties:
+      ApiId: !Ref apiGateway
+
+  V1Stage:
+    Type: AWS::ApiGatewayV2::Stage
+    DependsOn:
+      - apiGateway
+      - CounterAPIDeployment
+    Properties:
+      StageName: default
+      AutoDeploy: true
+      Description: Stage for counter to be called
+      DeploymentId: !Ref CounterAPIDeployment
+      ApiId: !Ref apiGateway
+
+  APICounterintegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref apiGateway
+      Description: Retrieve Counter API Lambda Integration
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:incrementViewDev/invocations
+      IntegrationMethod: POST
+      PayloadFormatVersion: '1.0'
+      
+  CounterViewRoute:
+    Type: AWS::ApiGatewayV2::Route
+    DependsOn:
+      - APICounterintegration
+    Properties:
+      ApiId: !Ref apiGateway
+      RouteKey: 'GET /incrementViewcountDev'
+      Target: !Join
+        - /
+        - - integrations
+          - !Ref APICounterintegration
+
+  ViewCountFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: incrementLambda/
+      Handler: app.lambda_handler
+      Runtime: python3.9
+      Architectures:
+        - x86_64
+      Policies:
+      # Give the Lambda service access to poll your DynamoDB Stream
+      - AmazonDynamoDBFullAccess
+      FunctionName: incrementViewDev
+
+      Events:
+        ViewEvent:
+          Type: Api
+          Properties:
+            Path: /incrementViewDev
+            Method: get
+
+  ApiGatewayInvokePermissionForViewCountFunction:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt ViewCountFunction.Arn
+      Principal: apigateway.amazonaws.com
+
+Outputs:
+  ViewCountApiOut:
+    Description: "API Gateway endpoint URL for Prod stage for incrementViewDev function"
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/incrementViewDev/"
